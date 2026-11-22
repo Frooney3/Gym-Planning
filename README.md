@@ -18,6 +18,26 @@ A single-file phone app (`index.html`) for logging workouts and planning trainin
 - **Progress**: estimated 1RM trend charts, personal records, weekly sets per muscle, streaks, and the full session history.
 - **Storage**: when opened on claude.ai, data is saved privately to your account, so it follows you across devices. It's also cached on the device. Opened anywhere else, it saves in the browser only. JSON backup export and import are included.
 
-## Running elsewhere
+## Installable phone app
 
-`index.html` is self-contained. Hosting it anywhere (e.g. GitHub Pages) gives the full logging and progression engine with browser storage. AI features need the claude.ai artifact runtime.
+`docs/` holds an installable version of the app (a PWA). It opens full screen from a home-screen icon and works offline on iPhone and Android.
+
+**One-time setup (GitHub Pages):** in the repo go to **Settings → Pages**. Under *Build and deployment*, choose **Deploy from a branch**, pick the branch that has `docs/` and the **/docs** folder, then **Save**. After a minute or so the app is live at **https://frooney3.github.io/Gym-Planning/**.
+
+**Install on your phone:**
+- **iPhone:** open the link in Safari, tap **Share**, then **Add to Home Screen**.
+- **Android:** open the link in Chrome and tap **Install app** (also in the ⋮ menu).
+
+In the installed app:
+- **AI coach:** add your own Anthropic API key in Profile (from console.anthropic.com; usage is billed to your account). The key is stored only on your phone.
+- **Storage:** data is saved on the phone. Use **Export backup** regularly; the file can be imported on another phone or into the claude.ai version.
+
+## Development
+
+`index.html` is the single source; it is also what's published as the claude.ai artifact. After editing it, run:
+
+```
+python3 build.py   # regenerates docs/ (needs Pillow)
+```
+
+`docs/vendor/anthropic-sdk.js` is the official `@anthropic-ai/sdk` (v1.5.0) bundled for the browser with esbuild.

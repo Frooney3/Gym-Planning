@@ -573,6 +573,69 @@ function trainingSummary() {
 const LS_KEY = "spotter.v1";
 const state = { profile: null, plan: null, workouts: [], chat: [], active: null, tab: "today", cloud: false, ai: false, loading: true };
 let db = null, uid = null, sample = null, downloads = null;
+
+/* =========================================================
+   Installed-app mode: outside claude.ai the coach talks to Claude
+   directly with the athlete's own API key (kept on this device only)
+   ========================================================= */
+const STANDALONE = typeof window.claude?.use !== "function";
+const API_KEY_LS = "spotter.apiKey";
+const MODEL = "claude-opus-5-5";
+function getApiKey() { try { return localStorage.getItem(API_KEY_LS) || ""; } catch { return ""; } }
+let sdkPromise = null;
+function loadSdk() { sdkPromise = sdkPromise || import("./vendor/anthropic-sdk.js").then(m => m.default); return sdkPromise; }
+function parseJsonLoose(text) {
+  const t = String(text || "").replace(/```(?:json)?/gi, "");
+  const a = t.indexOf("{"), b = t.lastIndexOf("}");
+  if (a < 0 || b <= a) throw { code: "invalid_json", text };
+  try { return JSON.parse(t.slice(a, b + 1)); } catch { throw { code: "invalid_json", text }; }
+}
+function makeApiSample() {
+  async function run(input, opts = {}) {
+    let Anthropic;
+    try { Anthropic = await loadSdk(); } catch { throw { code: "upstream_error" }; }
+    const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true });
+    const messages = typeof input === "string" ? [{ role: "user", content: input }] : input;
+    let streamed = "";
+    try {
+      const stream = client.beta.messages.stream({
+        model: MODEL, max_tokens: 16000,
+        betas: ["server-side-fallback-2026-07-01"], fallbacks: "default",
+        output_config: { effort: "medium" },
+        messages,
+      });
+      stream.on("text", (delta, snapshot) => { streamed = snapshot; opts.onText?.({ text: snapshot, delta }); });
+      const msg = await stream.finalMessage();
+      if (msg.stop_reason === "refusal") throw { code: "refused", text: streamed };
+      const text = msg.content.filter(b => b.type === "text").map(b => b.text).join("");
+      if (!text) throw { code: "empty_completion" };
+      return { text, truncated: msg.stop_reason === "max_tokens" };
+    } catch (e) {
+      if (e && e.code && !(e instanceof Error)) throw e;
+      if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) throw { code: "bad_key" };
+      if (e instanceof Anthropic.RateLimitError) throw { code: "rate_limited", text: streamed };
+      if (e instanceof Anthropic.BadRequestError) throw { code: "invalid_request", message: e.message };
+      throw { code: "upstream_error", text: streamed || undefined };
+    }
+  }
+  const fn = (input, opts) => run(input, opts);
+  fn.json = async (input, opts = {}) => parseJsonLoose((await run(input, { ...opts, onText: undefined })).text);
+  return fn;
+}
+let installEvt = null;
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; if (state.tab === "today" && !state.active) render(); });
+window.addEventListener("appinstalled", () => { installEvt = null; toast("Spotter installed"); render(); });
+function isInstalled() { try { return matchMedia("(display-mode: standalone)").matches || navigator.standalone === true; } catch { return false; } }
+function installBanner() {
+  if (!STANDALONE || isInstalled() || location.protocol === "file:") return "";
+  try { if (localStorage.getItem("spotter.hideInstall")) return ""; } catch {}
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  return `<div class="card stack"><div class="spread"><div><p class="label">Get the app</p><h3>Install Spotter on your phone</h3></div><button class="icon-btn" data-action="hide-install" aria-label="Hide">×</button></div>
+    ${installEvt ? `<p class="small muted">Adds Spotter to your home screen. It opens full screen and works offline.</p><button class="btn primary" data-action="install">Install app</button>`
+      : ios ? `<p class="small muted">In Safari, tap the Share button, then <b>Add to Home Screen</b>. Spotter then opens full screen from its own icon and works offline.</p>`
+      : `<p class="small muted">Open your browser menu (⋮) and tap <b>Install app</b> or <b>Add to Home screen</b>.</p>`}
+  </div>`;
+}
 function lsGet() { try { return JSON.parse(localStorage.getItem(LS_KEY) || "null"); } catch { return null; } }
 function lsSave() {
   try { localStorage.setItem(LS_KEY, JSON.stringify({ profile: state.profile, plan: state.plan, workouts: state.workouts, chat: state.chat, active: state.active })); } catch {}
@@ -648,7 +711,12 @@ async function boot() {
       setSync("err", e?.code === "timeout" ? "Cloud slow — using this device" : "Offline — using this device");
     }
   } else {
-    setSync("local", "Saved on this device");
+    setSync("local", STANDALONE ? "Saved on this phone" : "Saved on this device");
+  }
+  if (STANDALONE) {
+    if (getApiKey()) { sample = makeApiSample(); state.ai = true; }
+    try { navigator.storage?.persist?.(); } catch {}
+    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(() => {});
   }
   state.loading = false;
   render();
@@ -748,6 +816,7 @@ function viewToday() {
       <h1>${esc(greeting)}${p.name ? ", " + esc(p.name) : ""}</h1>
       <p class="muted">${thisWeek} of ${p.days} sessions done this week.</p>
     </div>
+    ${installBanner()}
     ${plan ? `
     <div class="day-pick" role="tablist" aria-label="Plan day">${plan.days.map((d, i) => `<button class="btn sm ${i === dayIdx ? "primary" : ""}" data-action="pick-day" data-i="${i}">${esc(d.name)}${i === next ? " · next" : ""}</button>`).join("")}</div>
     <div class="hero-card"><div class="bar"><i style="background:var(--plate-blue)"></i></div><div class="body">
@@ -774,6 +843,7 @@ function viewToday() {
   </div>`;
 }
 function aiUnavailable() {
+  if (STANDALONE) return `<div class="banner small stack">Add your Anthropic API key in Profile to turn on the AI coach. Until then the built-in engine plans your sessions and progresses your weights.<button class="btn sm" data-action="goto-key" style="align-self:flex-start">Add API key</button></div>`;
   return `<div class="banner small">AI coaching works when Spotter is opened from claude.ai. Here the built-in engine still plans your sessions and progresses your weights.</div>`;
 }
 
@@ -1052,7 +1122,7 @@ async function askCoach(q, auto) {
     } });
     msg.content = res.text;
   } catch (e) {
-    msg.content = e?.text ? e.text + "\n\n(Interrupted.)" : e?.code === "not_granted" ? "AI coaching needs permission. Allow it from the artifact's permission prompt, then try again." : e?.code === "rate_limited" ? "You've hit the AI usage limit for now. Try again later; your logging and auto-progression still work." : "I couldn't answer just now. Try again in a moment.";
+    msg.content = e?.text ? e.text + "\n\n(Interrupted.)" : e?.code === "bad_key" ? "Your API key was rejected. Check it in Profile, or create a new one at console.anthropic.com." : e?.code === "not_granted" ? "AI coaching needs permission. Allow it from the artifact's permission prompt, then try again." : e?.code === "rate_limited" ? "You've hit the AI usage limit for now. Try again later; your logging and auto-progression still work." : "I couldn't answer just now. Try again in a moment.";
   }
   delete msg.streaming;
   if (!msg.content) state.chat.pop();
@@ -1071,7 +1141,7 @@ function normExercises(list) {
   });
 }
 function aiErr(e) {
-  return e?.code === "not_granted" ? "AI needs your permission. Allow it when prompted and try again." : e?.code === "rate_limited" ? "AI usage limit reached for now. The built-in engine still works." : e?.code === "invalid_json" ? "The coach's answer came back malformed. Try again." : "Couldn't reach the coach. Try again in a moment.";
+  return e?.code === "bad_key" ? "Your API key was rejected. Check it in Profile." : e?.code === "not_granted" ? "AI needs your permission. Allow it when prompted and try again." : e?.code === "rate_limited" ? "AI usage limit reached for now. The built-in engine still works." : e?.code === "invalid_json" ? "The coach's answer came back malformed. Try again." : "Couldn't reach the coach. Try again in a moment.";
 }
 async function aiPlan() {
   if (!sample || ui.aiBusy) return;
@@ -1138,9 +1208,15 @@ function viewProfile() {
     <div class="stack"><p class="label">Profile</p><h1>About you</h1><p class="small muted">Changing your goal, days or equipment offers to rebuild your plan. Your history is never lost.</p></div>
     <div class="card">${profileForm(state.profile, "Save profile")}</div>
     ${ui.confirm === "rebuild-after-save" ? `<div class="confirm"><span class="small">Your training setup changed. Rebuild your plan to match?</span><button class="btn sm primary" data-action="gen-plan">Rebuild plan</button><button class="btn sm" data-action="cancel">Keep current plan</button></div>` : ""}
+    ${STANDALONE ? `<div class="card stack" id="ai-key-card">
+      <div><p class="label">AI coach</p><h3>Connect your Anthropic API key</h3></div>
+      <p class="small muted">The installed app talks to Claude directly using your own API key from console.anthropic.com. Usage is billed to your Anthropic account; a coach reply typically costs a few cents. The key is stored only on this phone.</p>
+      ${getApiKey() ? `<div class="row"><span class="chip good">Key saved · ends ${esc(getApiKey().slice(-4))}</span><button class="btn sm ghost danger" data-action="key-remove">Remove key</button></div>`
+        : `<label class="field"><span>API key</span><input type="password" id="api-key" autocomplete="off" spellcheck="false" placeholder="sk-ant-…"></label><button class="btn sm primary" data-action="key-save" style="align-self:flex-start">Save key</button>`}
+    </div>` : ""}
     <div class="card stack">
       <div><p class="label">Your data</p><h3>Storage & backup</h3></div>
-      <p class="small muted">${state.cloud ? "Your workouts, plan and coach chat are saved privately to your claude.ai account, so they're there on any device you open Spotter on." : "Your data is saved in this browser only. Export a backup now and then so you never lose it."} ${state.workouts.length} sessions stored.</p>
+      <p class="small muted">${state.cloud ? "Your workouts, plan and coach chat are saved privately to your claude.ai account, so they're there on any device you open Spotter on." : STANDALONE ? "Your data is saved on this phone. Export a backup now and then; you can import it on another phone or into Spotter on claude.ai." : "Your data is saved in this browser only. Export a backup now and then so you never lose it."} ${state.workouts.length} sessions stored.</p>
       <div class="row"><button class="btn sm" data-action="export">Export backup</button><label class="btn sm" for="import-file">Import backup</label><input type="file" id="import-file" accept="application/json,.json" hidden></div>
       <textarea id="export-box" hidden readonly></textarea>
       ${ui.confirm === "reset" ? `<div class="confirm"><span class="small">Erase every workout, your plan and your profile? This can't be undone.</span><button class="btn sm danger" data-action="reset-yes">Erase everything</button><button class="btn sm" data-action="cancel">Cancel</button></div>` : `<button class="btn sm ghost danger" data-action="reset" style="align-self:flex-start">Erase all data</button>`}
@@ -1151,6 +1227,13 @@ async function doExport() {
   const data = JSON.stringify({ app: "spotter", version: 1, exportedAt: new Date().toISOString(), profile: state.profile, plan: state.plan, workouts: state.workouts }, null, 1);
   const filename = `spotter-backup-${new Date().toISOString().slice(0, 10)}.json`;
   if (downloads) { try { await downloads.save({ filename, data }); toast("Backup saved"); return; } catch (e) { if (e?.code === "declined" || e?.code === "cancelled") return; } }
+  if (STANDALONE) {
+    try {
+      const url = URL.createObjectURL(new Blob([data], { type: "application/json" }));
+      const a = document.createElement("a"); a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000); toast("Backup downloaded"); return;
+    } catch {}
+  }
   const box = document.getElementById("export-box"); box.hidden = false; box.value = data; box.select();
   try { await navigator.clipboard.writeText(data); toast("Backup copied to clipboard"); } catch { toast("Copy the backup text below"); }
 }
@@ -1270,6 +1353,14 @@ document.addEventListener("click", e => {
     case "clear-chat": ui.confirm = "clear-chat"; render(); break;
     case "clear-chat-yes": state.chat = []; ui.confirm = null; saveChat(); render(); break;
     case "export": doExport(); break;
+    case "goto-key": setTab("profile"); requestAnimationFrame(() => document.getElementById("ai-key-card")?.scrollIntoView({ block: "center" })); break;
+    case "key-save": { const v = document.getElementById("api-key").value.trim();
+      if (!/^sk-ant-/.test(v)) { toast("That doesn't look like an Anthropic API key (sk-ant-…)"); break; }
+      try { localStorage.setItem(API_KEY_LS, v); } catch { toast("Couldn't save the key on this device"); break; }
+      sample = makeApiSample(); state.ai = true; render(); toast("AI coach connected"); break; }
+    case "key-remove": try { localStorage.removeItem(API_KEY_LS); } catch {} sample = null; state.ai = false; render(); toast("Key removed"); break;
+    case "install": if (installEvt) { installEvt.prompt(); installEvt.userChoice.finally(() => { installEvt = null; render(); }); } break;
+    case "hide-install": try { localStorage.setItem("spotter.hideInstall", "1"); } catch {} render(); break;
     case "reset": ui.confirm = "reset"; render(); break;
     case "reset-yes": resetAll(); break;
   }
