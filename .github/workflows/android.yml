@@ -37,9 +37,9 @@ jobs:
 
       - name: Install Gradle
         run: |
-          curl -sSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.10.2-bin.zip
+          curl -sSL -o gradle.zip https://services.gradle.org/distributions/gradle-8.11.1-bin.zip
           unzip -q gradle.zip -d "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/gradle-8.10.2/bin" >> "$GITHUB_PATH"
+          echo "$RUNNER_TEMP/gradle-8.11.1/bin" >> "$GITHUB_PATH"
 
       - name: Use the permanent signing key from repository secrets
         env:

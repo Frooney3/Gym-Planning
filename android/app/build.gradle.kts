@@ -8,7 +8,7 @@ val buildNumber = (System.getenv("VERSION_CODE") ?: "1").toInt()
 
 android {
     namespace = "app.spotter.trainer"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "app.spotter.trainer"
