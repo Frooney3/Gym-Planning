@@ -20,9 +20,9 @@ A single-file phone app (`index.html`) for logging workouts and planning trainin
 
 ## Installable phone app
 
-`docs/` holds an installable version of the app (a PWA). It opens full screen from a home-screen icon and works offline on iPhone and Android.
+The repo root holds an installable version of the app (a PWA). It opens full screen from a home-screen icon and works offline on iPhone and Android.
 
-**One-time setup (GitHub Pages):** in the repo go to **Settings → Pages**. Under *Build and deployment*, choose **Deploy from a branch**, pick the branch that has `docs/` and the **/docs** folder, then **Save**. After a minute or so the app is live at **https://frooney3.github.io/Gym-Planning/**.
+**One-time setup (GitHub Pages):** in the repo go to **Settings → Pages**. Under *Build and deployment*, choose **Deploy from a branch**, pick the branch with the app and the **/ (root)** folder, then **Save**. After a minute or so the app is live at **https://frooney3.github.io/Gym-Planning/**.
 
 **Install on your phone:**
 - **iPhone:** open the link in Safari, tap **Share**, then **Add to Home Screen**.
@@ -34,10 +34,10 @@ In the installed app:
 
 ## Development
 
-`index.html` is the single source; it is also what's published as the claude.ai artifact. After editing it, run:
+`src/spotter.html` is the single source; it is also what's published as the claude.ai artifact. After editing it, run:
 
 ```
-python3 build.py   # regenerates docs/ (needs Pillow)
+python3 build.py   # regenerates index.html, manifest, sw.js and icons at the root (needs Pillow)
 ```
 
-`docs/vendor/anthropic-sdk.js` is the official `@anthropic-ai/sdk` (v1.5.0) bundled for the browser with esbuild.
+`vendor/anthropic-sdk.js` is the official `@anthropic-ai/sdk` (v1.5.0) bundled for the browser with esbuild.

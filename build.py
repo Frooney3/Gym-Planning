@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the installable phone app (PWA) into docs/ from index.html.
+"""Build the installable phone app (PWA) at the repo root from src/spotter.html.
 
-index.html is the single source of the app (it is also what's published as the
+src/spotter.html is the single source of the app (it is also what's published as the
 claude.ai artifact). This script wraps it in a full HTML document and adds the
 web app manifest, home-screen icons and an offline service worker, so GitHub
-Pages can serve docs/ as an installable app.
+Pages (deploying the repo root) serves an installable app.
 
     python3 build.py
 """
@@ -16,8 +16,8 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 ROOT = Path(__file__).parent
-DOCS = ROOT / "docs"
-SRC = (ROOT / "index.html").read_text(encoding="utf-8")
+DOCS = ROOT  # output goes to the repo root, which GitHub Pages serves
+SRC = (ROOT / "src" / "spotter.html").read_text(encoding="utf-8")
 
 BG_LIGHT, BG_DARK = "#eef1f4", "#0e1217"
 
@@ -107,7 +107,7 @@ def main():
     sw = sw.replace("__VERSION__", version).replace("__SHELL__", json.dumps(shell))
     (DOCS / "sw.js").write_text(sw, encoding="utf-8")
     (DOCS / ".nojekyll").write_text("", encoding="utf-8")
-    print(f"Built docs/ (version {version})")
+    print(f"Built app at repo root (version {version})")
 
 
 if __name__ == "__main__":
