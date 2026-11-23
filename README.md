@@ -32,6 +32,17 @@ In the installed app:
 - **AI coach:** add your own Anthropic API key in Profile (from console.anthropic.com; usage is billed to your account). The key is stored only on your phone.
 - **Storage:** data is saved on the phone. Use **Export backup** regularly; the file can be imported on another phone or into the claude.ai version.
 
+## Android app with Pixel Watch (Health Connect)
+
+`android/` wraps the same app in a native Android shell that connects to **Health Connect**, where the Pixel Watch syncs its data through the Fitbit app. It can:
+- **Rate your recovery** from last night's sleep, resting heart rate and HRV, compared with your own 7-day averages. On low-recovery days it offers a lighter session (one set fewer, about 90% weight), and the AI coach sees the same data.
+- **Record workout heart rate:** attaches the average and peak heart rate from your watch to each logged session.
+- **Save workouts to Fitbit:** writes finished workouts back to Health Connect as strength-training sessions.
+
+**Get it:** every push builds the app on GitHub Actions and publishes it as the [`android-latest` release](https://github.com/Frooney3/Gym-Planning/releases/tag/android-latest). On your phone, download `spotter.apk` and open it. Allow "install unknown apps" for your browser when asked.
+
+**Signing key (one-time, so updates install over the top):** add two repository secrets under **Settings → Secrets and variables → Actions**: `SPOTTER_KEYSTORE_B64` (the base64 keystore) and `SPOTTER_KEYSTORE_PASSWORD`. The key is never committed. Without these secrets, builds use a temporary key, and you must uninstall the old build before installing a new one. Uninstalling erases the app's data, so export a backup first.
+
 ## Development
 
 `src/spotter.html` is the single source; it is also what's published as the claude.ai artifact. After editing it, run:
