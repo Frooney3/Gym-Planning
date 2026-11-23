@@ -48,6 +48,11 @@ def main():
     icon(512).save(DOCS / "icons/icon-512.png")
     icon(512, logo_scale=0.56).save(DOCS / "icons/maskable-512.png")
     icon(180, logo_scale=0.66).save(DOCS / "icons/apple-touch-icon.png")
+    # Android app launcher icons
+    for density, px in {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}.items():
+        out = ROOT / "android/app/src/main/res" / f"mipmap-{density}"
+        out.mkdir(parents=True, exist_ok=True)
+        icon(px, logo_scale=0.66).save(out / "ic_launcher.png")
 
     manifest = {
         "name": "Spotter",

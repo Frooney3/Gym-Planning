@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Spotter</string>
+    <string name="privacy_title">Spotter and your health data</string>
+    <string name="privacy_body">Spotter reads your sleep, resting heart rate, heart rate variability, heart rate and steps from Health Connect to judge how recovered you are and adjust your training. It can also save finished workouts to Health Connect.\n\nThis data stays on your phone. It is only sent anywhere if you turn on the AI coach with your own Anthropic API key: then a summary of your training and recovery is sent to Anthropic with each coach request.\n\nYou can remove Spotter\'s access at any time in Health Connect.</string>
+</resources>

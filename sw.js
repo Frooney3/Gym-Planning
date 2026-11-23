@@ -1,5 +1,5 @@
 // Spotter offline service worker (generated into docs/sw.js by build.py)
-const CACHE = "spotter-c0c4aec7d1";
+const CACHE = "spotter-7d2920fa95";
 const SHELL = ["./", "index.html", "manifest.webmanifest", "vendor/anthropic-sdk.js", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 const FONT_HOSTS = ["fonts.googleapis.com", "fonts.gstatic.com"];
 

@@ -533,6 +533,7 @@ function trainingSummary() {
   const lines = [];
   lines.push(`ATHLETE: ${p.name || "Unnamed"}; goal=${GOALS[p.goal]?.label || p.goal}; level=${p.level}; trains ${p.days} days/week; ~${p.minutes} min/session; equipment=${EQUIP_LABELS[p.equipment] || p.equipment}; units=${u}${p.bodyweight ? `; bodyweight=${fmtW(+p.bodyweight)}${u}` : ""}${p.age ? `; age=${p.age}` : ""}${p.sex ? `; sex=${p.sex}` : ""}.`);
   if (p.notes) lines.push(`ATHLETE NOTES (injuries, preferences): ${p.notes}`);
+  lines.push(...readinessSummaryLines());
   if (state.plan) {
     lines.push(`CURRENT PLAN "${state.plan.name}" (${state.plan.source === "ai" ? "made by coach" : "auto-generated"}):`);
     state.plan.days.forEach((d, i) => lines.push(`  Day ${i + 1} ${d.name}: ${d.exercises.map(x => `${x.name} ${x.sets}x${x.repLow}-${x.repHigh}`).join("; ")}`));
@@ -622,12 +623,89 @@ function makeApiSample() {
   fn.json = async (input, opts = {}) => parseJsonLoose((await run(input, { ...opts, onText: undefined })).text);
   return fn;
 }
+/* =========================================================
+   Android app bridge: Health Connect (Pixel Watch sleep, heart rate, HRV)
+   window.SpotterNative only exists inside the Spotter Android app
+   ========================================================= */
+const NATIVE = (() => {
+  const n = window.SpotterNative;
+  if (!n || typeof n.call !== "function") return null;
+  const pending = new Map(); let seq = 0;
+  window.__spotterNativeResolve = (id, res) => {
+    const p = pending.get(id); if (!p) return; pending.delete(id);
+    if (res && res.ok) p.resolve(res.data); else p.reject(res || { error: "unknown" });
+  };
+  return { call: (method, args = {}) => new Promise((resolve, reject) => { const id = "c" + (++seq); pending.set(id, { resolve, reject }); n.call(id, method, JSON.stringify(args)); }) };
+})();
+const health = { status: null, readiness: null, loading: false, error: "" };
+function hcGranted(suffix) { return !!health.status?.granted?.some(p => p.endsWith(suffix)); }
+function hcConnected() { return !!health.status?.available && (health.status?.granted?.length || 0) > 0; }
+async function refreshHealth() {
+  if (!NATIVE) return;
+  health.loading = true; health.error = "";
+  try {
+    health.status = await NATIVE.call("status");
+    if (hcConnected()) health.readiness = await NATIVE.call("readiness");
+  } catch (e) { health.error = e?.error || "Couldn't read Health Connect"; }
+  health.loading = false;
+  if (!state.active && (state.tab === "today" || state.tab === "profile")) render();
+}
+function readinessInfo(r) {
+  if (!r) return null;
+  let score = 0; const notes = [];
+  const s = r.sleep?.minutes;
+  if (s != null) { if (s < 360) { score -= 1; notes.push(`short sleep (${fmtMins(s)})`); } else if (s >= 450) score += 0.5; }
+  const rhr = r.restingHr;
+  if (rhr?.latest && rhr?.baseline) { const d = rhr.latest - rhr.baseline; if (d >= 5) { score -= 1; notes.push(`resting heart rate ${Math.round(d)} bpm above your usual`); } else if (d <= -2) score += 0.5; }
+  const hrv = r.hrv;
+  if (hrv?.latest && hrv?.baseline) { const ratio = hrv.latest / hrv.baseline; if (ratio < 0.85) { score -= 1; notes.push(`HRV ${Math.round((1 - ratio) * 100)}% below your usual`); } else if (ratio > 1.05) score += 0.5; }
+  const hasData = s != null || rhr?.latest || hrv?.latest;
+  if (!hasData) return { level: "none", label: "No recent data", advice: "Wear your watch to sleep tonight and Spotter will gauge your recovery tomorrow.", notes };
+  const level = score <= -2 ? "low" : score < 0 ? "fair" : "good";
+  const advice = level === "low" ? `Recovery looks low: ${notes.join(", ")}. A lighter day is recommended: one set fewer per exercise at about 90% of the planned weight.`
+    : level === "fair" ? `Recovery is a bit down (${notes.join(", ")}). Train as planned, but stop sets with an extra rep in reserve.`
+    : "You look well recovered. Train as planned and push for the top of your rep ranges.";
+  return { level, label: { low: "Low recovery", fair: "Fair recovery", good: "Good to train" }[level], advice, notes };
+}
+function fmtMins(m) { m = Math.round(m); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`; }
+function readinessSummaryLines() {
+  const r = health.readiness; if (!r) return [];
+  const i = readinessInfo(r);
+  const parts = [];
+  if (r.sleep?.minutes != null) parts.push(`sleep last night ${fmtMins(r.sleep.minutes)}${r.sleep.deepMin != null ? ` (deep ${r.sleep.deepMin}m, REM ${r.sleep.remMin}m)` : ""}`);
+  if (r.restingHr?.latest) parts.push(`resting HR ${r.restingHr.latest} bpm (7-day usual ${r.restingHr.baseline ?? "?"})`);
+  if (r.hrv?.latest) parts.push(`HRV ${Math.round(r.hrv.latest)} ms (usual ${r.hrv.baseline ? Math.round(r.hrv.baseline) : "?"})`);
+  if (r.steps?.yesterday != null) parts.push(`steps yesterday ${r.steps.yesterday}`);
+  return parts.length ? [`RECOVERY FROM PIXEL WATCH (Health Connect): ${parts.join("; ")}. Spotter's assessment: ${i.label}.`] : [];
+}
+function healthTodayCard() {
+  if (!NATIVE) return "";
+  const st = health.status;
+  if (!st) return health.loading ? `<div class="card small muted"><span class="spinner"></span> Checking Health Connect…</div>` : "";
+  if (!st.available) return `<div class="card stack"><div><p class="label">Pixel Watch</p><h3>Health Connect needed</h3></div><p class="small muted">Spotter reads your watch's sleep and heart data through Health Connect, which isn't set up on this phone yet.</p><button class="btn sm" data-action="hc-open" style="align-self:flex-start">Set up Health Connect</button></div>`;
+  if (!hcConnected()) return `<div class="card stack"><div><p class="label">Pixel Watch</p><h3>Connect your watch</h3></div><p class="small muted">Let Spotter read last night's sleep, resting heart rate and HRV from Health Connect so it can tell you whether to push or back off today, and save your workouts back to Fitbit.</p><button class="btn primary sm" data-action="hc-connect" style="align-self:flex-start">Connect Health Connect</button>${health.error ? `<p class="small" style="color:var(--bad)">${esc(health.error)}</p>` : ""}</div>`;
+  const r = health.readiness, i = readinessInfo(r);
+  if (!r || !i) return "";
+  const cls = { low: "bad", fair: "warn", good: "good", none: "" }[i.level];
+  const rhrD = r.restingHr?.latest && r.restingHr?.baseline ? Math.round(r.restingHr.latest - r.restingHr.baseline) : null;
+  const tile = (val, label, sub) => `<div class="stat"><b>${val}</b><span>${label}</span>${sub ? `<div class="small muted" style="margin-top:2px">${sub}</div>` : ""}</div>`;
+  return `<div class="card stack">
+    <div class="spread"><div><p class="label">Recovery · Pixel Watch</p><h3>${esc(i.label)}</h3></div><span class="row"><span class="chip ${cls}">${i.level === "none" ? "—" : esc(i.level)}</span><button class="icon-btn" data-action="hc-refresh" aria-label="Refresh">↻</button></span></div>
+    <div class="stats">
+      ${tile(r.sleep?.minutes != null ? fmtMins(r.sleep.minutes) : "—", "Sleep", r.sleep?.deepMin != null ? `${r.sleep.deepMin}m deep` : "")}
+      ${tile(r.restingHr?.latest ?? "—", "Resting HR", rhrD != null ? `${rhrD >= 0 ? "+" : ""}${rhrD} vs usual` : "")}
+      ${tile(r.hrv?.latest ? Math.round(r.hrv.latest) : "—", "HRV ms", r.hrv?.baseline ? `usual ${Math.round(r.hrv.baseline)}` : "")}
+    </div>
+    <p class="small">${esc(i.advice)}</p>
+    ${i.level !== "none" ? `<label class="row small"><input type="checkbox" id="lighter" ${ui.lighter ?? i.level === "low" ? "checked" : ""}> Go lighter today (−1 set, ~90% weight)</label>` : ""}
+  </div>`;
+}
 let installEvt = null;
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); installEvt = e; if (state.tab === "today" && !state.active) render(); });
 window.addEventListener("appinstalled", () => { installEvt = null; toast("Spotter installed"); render(); });
 function isInstalled() { try { return matchMedia("(display-mode: standalone)").matches || navigator.standalone === true; } catch { return false; } }
 function installBanner() {
-  if (!STANDALONE || isInstalled() || location.protocol === "file:") return "";
+  if (!STANDALONE || NATIVE || isInstalled() || location.protocol === "file:") return "";
   try { if (localStorage.getItem("spotter.hideInstall")) return ""; } catch {}
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   return `<div class="card stack"><div class="spread"><div><p class="label">Get the app</p><h3>Install Spotter on your phone</h3></div><button class="icon-btn" data-action="hide-install" aria-label="Hide">×</button></div>
@@ -716,7 +794,11 @@ async function boot() {
   if (STANDALONE) {
     if (getApiKey()) { sample = makeApiSample(); state.ai = true; }
     try { navigator.storage?.persist?.(); } catch {}
-    if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(() => {});
+    if (!NATIVE && "serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) navigator.serviceWorker.register("./sw.js").catch(() => {});
+  }
+  if (NATIVE) {
+    refreshHealth();
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshHealth(); });
   }
   state.loading = false;
   render();
@@ -817,6 +899,7 @@ function viewToday() {
       <p class="muted">${thisWeek} of ${p.days} sessions done this week.</p>
     </div>
     ${installBanner()}
+    ${healthTodayCard()}
     ${plan ? `
     <div class="day-pick" role="tablist" aria-label="Plan day">${plan.days.map((d, i) => `<button class="btn sm ${i === dayIdx ? "primary" : ""}" data-action="pick-day" data-i="${i}">${esc(d.name)}${i === next ? " · next" : ""}</button>`).join("")}</div>
     <div class="hero-card"><div class="bar"><i style="background:var(--plate-blue)"></i></div><div class="body">
@@ -853,7 +936,12 @@ function startWorkout(title, items, extra = {}) {
     id: uidGen(), title, startedAt: new Date().toISOString(), ...extra,
     exercises: items.map(x => {
       const s = suggest(x);
-      const n = Math.max(1, +x.sets || 3);
+      let n = Math.max(1, +x.sets || 3);
+      if (extra.lighter) {
+        n = Math.max(2, n - 1);
+        if (s.weight) s.weight = roundLoad(s.weight * 0.9, exInfo(x.name));
+        s.note = `Lighter day for recovery: ${s.weight ? `${fmtW(s.weight)} ${unit()} (about 90%), ` : ""}one set fewer. ` + s.note;
+      }
       return { name: x.name, target: { sets: n, repLow: +x.repLow || 8, repHigh: +x.repHigh || +x.repLow || 10, rest: x.rest ?? 90 }, note: x.notes || "", tip: s.note,
         sets: Array.from({ length: n }, () => ({ w: s.weight != null ? s.weight : null, r: s.reps || x.repLow || "", rpe: "", done: false })) };
     }),
@@ -947,10 +1035,26 @@ function finishWorkout() {
   const newPRs = Object.keys(after).filter(k => after[k].date === w.date && (!before[k] || after[k].val > before[k].val + 1e-9) && before[k]);
   state.active = null; rest = null; ui.planDay = null; ui.confirm = null;
   saveWorkout(w); saveActive(0);
+  if (NATIVE && hcConnected()) syncWorkoutToHealth(w);
   ui.lastSaved = { id: w.id, prs: newPRs };
   render(); window.scrollTo(0, 0);
   toast(newPRs.length ? `Saved · ${newPRs.length} new PR${newPRs.length > 1 ? "s" : ""}!` : "Workout saved");
   if (state.ai) { state.tab = "coach"; try { history.replaceState(null, "", "#coach"); } catch {} askCoach(`I just finished "${w.title}". Review it briefly: what went well, anything to watch, and what I should focus on next session.${newPRs.length ? ` New PRs today: ${newPRs.join(", ")}.` : ""}`, true); }
+}
+
+async function syncWorkoutToHealth(w) {
+  const end = new Date(new Date(w.date).getTime() + w.durationMin * 60000).toISOString();
+  if (hcGranted("READ_HEART_RATE")) {
+    try {
+      const hr = await NATIVE.call("sessionHeartRate", { start: w.date, end });
+      if (hr && hr.avg) { w.hr = { avg: Math.round(hr.avg), max: Math.round(hr.max) }; saveWorkout(w); if (state.tab === "history") render(); }
+    } catch {}
+  }
+  if (state.profile.hcWrite !== false && hcGranted("WRITE_EXERCISE")) {
+    const notes = w.exercises.map(e => `${e.name}: ${e.sets.map(s => s.w ? `${fmtW(s.w)}${unit()}×${s.r}` : `${s.r}`).join(", ")}`).join("\n");
+    try { await NATIVE.call("writeWorkout", { start: w.date, end, title: `Spotter · ${w.title || "Workout"}`, notes: notes.slice(0, 1000) }); toast("Saved to Health Connect"); }
+    catch { toast("Couldn't save to Health Connect"); }
+  }
 }
 
 /* ---------- Plan ---------- */
@@ -1022,7 +1126,7 @@ function histItem(w) {
   const vol = workoutVolume(w);
   return `<details class="hist" ${ui.lastSaved?.id === w.id ? "open" : ""}><summary>
     <div class="date"><b>${d.getDate()}</b><span>${d.toLocaleDateString(undefined, { month: "short" })}</span></div>
-    <div style="flex:1;min-width:0"><b>${esc(w.title || "Workout")}</b><div class="small muted num">${w.exercises.length} exercises · ${sets} sets${vol ? ` · ${Math.round(toDisp(vol)).toLocaleString()} ${unit()} lifted` : ""}${w.durationMin ? ` · ${w.durationMin} min` : ""}</div></div>
+    <div style="flex:1;min-width:0"><b>${esc(w.title || "Workout")}</b><div class="small muted num">${w.exercises.length} exercises · ${sets} sets${vol ? ` · ${Math.round(toDisp(vol)).toLocaleString()} ${unit()} lifted` : ""}${w.durationMin ? ` · ${w.durationMin} min` : ""}${w.hr?.avg ? ` · avg ${w.hr.avg} bpm` : ""}</div></div>
   </summary><div class="content">
     ${w.exercises.map(e => { const t = exInfo(e.name).kind === "t"; return `<div class="hist-ex"><b>${esc(e.name)}</b><div class="sets-line">${e.sets.map(s => s.w ? `${fmtW(s.w)}×${s.r}${s.rpe ? "@" + s.rpe : ""}` : t ? fmtSecs(s.r) : `${s.r} reps`).join(" · ")}</div></div>`; }).join("")}
     ${w.notes ? `<p class="small muted">“${esc(w.notes)}”</p>` : ""}
@@ -1208,6 +1312,12 @@ function viewProfile() {
     <div class="stack"><p class="label">Profile</p><h1>About you</h1><p class="small muted">Changing your goal, days or equipment offers to rebuild your plan. Your history is never lost.</p></div>
     <div class="card">${profileForm(state.profile, "Save profile")}</div>
     ${ui.confirm === "rebuild-after-save" ? `<div class="confirm"><span class="small">Your training setup changed. Rebuild your plan to match?</span><button class="btn sm primary" data-action="gen-plan">Rebuild plan</button><button class="btn sm" data-action="cancel">Keep current plan</button></div>` : ""}
+    ${NATIVE ? `<div class="card stack">
+      <div><p class="label">Pixel Watch</p><h3>Health Connect</h3></div>
+      <p class="small muted">${!health.status ? "Checking…" : !health.status.available ? "Health Connect isn't set up on this phone." : hcConnected() ? `Connected. Spotter reads sleep, resting heart rate, HRV, workout heart rate and steps${hcGranted("WRITE_EXERCISE") ? ", and saves your workouts to Health Connect so they show in Fitbit" : ""}.` : "Not connected yet."}</p>
+      ${hcConnected() ? `<label class="row small"><input type="checkbox" id="hc-write" ${state.profile.hcWrite !== false ? "checked" : ""}> Save finished workouts to Health Connect</label>` : ""}
+      <div class="row">${health.status?.available && !hcConnected() ? `<button class="btn sm primary" data-action="hc-connect">Connect</button>` : ""}<button class="btn sm" data-action="hc-open">${health.status?.available ? "Manage permissions" : "Set up Health Connect"}</button></div>
+    </div>` : ""}
     ${STANDALONE ? `<div class="card stack" id="ai-key-card">
       <div><p class="label">AI coach</p><h3>Connect your Anthropic API key</h3></div>
       <p class="small muted">The installed app talks to Claude directly using your own API key from console.anthropic.com. Usage is billed to your Anthropic account; a coach reply typically costs a few cents. The key is stored only on this phone.</p>
@@ -1226,6 +1336,7 @@ function viewProfile() {
 async function doExport() {
   const data = JSON.stringify({ app: "spotter", version: 1, exportedAt: new Date().toISOString(), profile: state.profile, plan: state.plan, workouts: state.workouts }, null, 1);
   const filename = `spotter-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  if (NATIVE) { try { const r = await NATIVE.call("saveFile", { filename, text: data }); if (r?.saved) toast("Backup saved"); } catch { toast("Couldn't save the backup"); } return; }
   if (downloads) { try { await downloads.save({ filename, data }); toast("Backup saved"); return; } catch (e) { if (e?.code === "declined" || e?.code === "cancelled") return; } }
   if (STANDALONE) {
     try {
@@ -1286,6 +1397,8 @@ document.addEventListener("change", e => {
   const t = e.target;
   if (t.name === "feel") ui.feel = +t.value;
   if (t.name === "tavail") ui.timeAvail = +t.value;
+  if (t.id === "lighter") ui.lighter = t.checked;
+  if (t.id === "hc-write") { state.profile.hcWrite = t.checked; saveProfile(); toast(t.checked ? "Workouts will be saved to Health Connect" : "Workouts stay in Spotter only"); }
   if (t.name === "wfeel" && state.active) { state.active.feel = +t.value; saveActive(); }
   if (t.id === "hist-ex") { ui.histEx = t.value; render(); }
   if (t.id === "import-file" && t.files[0]) doImport(t.files[0]);
@@ -1316,7 +1429,8 @@ document.addEventListener("click", e => {
   const a = b.dataset.action, A = state.active;
   switch (a) {
     case "pick-day": ui.planDay = +b.dataset.i; render(); break;
-    case "start-plan": { const i = +b.dataset.i, d = state.plan.days[i]; if (A) { setTab("today"); toast("Finish or discard your current workout first"); break; } state.tab = "today"; try { history.replaceState(null, "", "#today"); } catch {} startWorkout(d.name, d.exercises, { planName: state.plan.name, planDay: i, source: "plan" }); break; }
+    case "start-plan": { const i = +b.dataset.i, d = state.plan.days[i]; if (A) { setTab("today"); toast("Finish or discard your current workout first"); break; } state.tab = "today"; try { history.replaceState(null, "", "#today"); } catch {} const ri = readinessInfo(health.readiness); const lighter = !!(NATIVE && ri && ri.level !== "none" && (ui.lighter ?? ri.level === "low"));
+      startWorkout(d.name, d.exercises, { planName: state.plan.name, planDay: i, source: "plan", lighter }); break; }
     case "start-empty": startWorkout("Workout", []); break;
     case "gen-plan": state.plan = buildPlan(state.profile); ui.confirm = null; ui.planDay = null; savePlan(); toast("Plan rebuilt"); render(); break;
     case "ask-regen": ui.confirm = "regen"; render(); break;
@@ -1360,6 +1474,9 @@ document.addEventListener("click", e => {
       sample = makeApiSample(); state.ai = true; render(); toast("AI coach connected"); break; }
     case "key-remove": try { localStorage.removeItem(API_KEY_LS); } catch {} sample = null; state.ai = false; render(); toast("Key removed"); break;
     case "install": if (installEvt) { installEvt.prompt(); installEvt.userChoice.finally(() => { installEvt = null; render(); }); } break;
+    case "hc-connect": NATIVE?.call("requestPermissions").then(refreshHealth, e => { health.error = e?.error || "Permission request failed"; render(); }); break;
+    case "hc-open": NATIVE?.call("openHealthConnect").catch(() => toast("Couldn't open Health Connect")); break;
+    case "hc-refresh": refreshHealth(); toast("Refreshing recovery data"); break;
     case "hide-install": try { localStorage.setItem("spotter.hideInstall", "1"); } catch {} render(); break;
     case "reset": ui.confirm = "reset"; render(); break;
     case "reset-yes": resetAll(); break;

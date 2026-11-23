@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="spotter_bg">#EEF1F4</color>
+    <style name="Theme.Spotter" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/spotter_bg</item>
+        <item name="android:colorAccent">#1F57C3</item>
+    </style>
+</resources>
